@@ -18,10 +18,10 @@ const USER_ID = "UserID"
 const API_TOKEN = "APIToken"
 
 /**
- * After you deploy this webapp (the Deploy button in the upper-right), the URL it gives you
+ * The URL it gives you after you deploy this webapp (the Deploy button in the upper-right)
  * This will be stored in your Habitica user API data, and is where Habitica sends the requested data
  */
-const WEB_APP_URL = "WebAPPUrl"
+const WEB_APP_URL = "WebAppURL"
 
 /* ========================================== */
 /* [Users] Required customizations to fill in */
@@ -45,15 +45,8 @@ const SPREADSHEET_ID = "SpreadsheetID"
 const SHEET_NAME = "Sheet1"
 
 /* ========================================== */
-/* [Users] Optional customizations to fill in */
+/* [Users] Do not edit code below this line   */
 /* ========================================== */
-
-// TODO - Add stuff to let the user change what values go in the spreadsheet
-
-/* ========================================== */
-/* [Users] Do not edit code below this        */
-/* ========================================== */
-
 const AUTHOR_ID = "fd200d06-beb0-46fd-b42f-81924c037574"
 const SCRIPT_NAME = "Task Activity to Google Sheets"
 const HEADERS = {
@@ -62,100 +55,44 @@ const HEADERS = {
   "x-api-key" : API_TOKEN,
 }
 
-/**
- * Creates the webhook if it doesn't already exist
- */
 function doOneTimeSetup() {
-  // Ensure the webhook doesn't already exist
-  var requestCurrentWebhooksParams = {
-    "method" : "get",
-    "headers" : HEADERS,
-    "muteHttpExceptions" : true,
+  // Next, create the webhook
+  const options = {
+    "scored" : true,
   }
-
-  currentWebhooks = UrlFetchApp.fetch("https://habitica.com/api/v3/user/webhook", requestCurrentWebhooksParams)
-
-  var isDuplicate = false
-  for (var i in currentWebhooks) {
-    if (currentWebhooks[i].label == newWebhookPayload.label) {
-      isDuplicate = true
-    }
-  }
-
-  // Create new webhook
-  var newWebhookPayload = {
+  const payload = {
     "url" : WEB_APP_URL,
     "label" : SCRIPT_NAME + " Webhook",
     "type" : "taskActivity",
-    "options" : {
-      "created": false,
-      "updated": false,
-      "deleted": false,
-      "scored" : true
-    }
+    "options" : options,
   }
-
-  const newWebhookParams = {
-    "method" : "post",
-    "headers" : HEADERS,
-    "contentType" : "application/json",
-    "payload" : JSON.stringify(newWebhookPayload),
-    "muteHttpExceptions" : true,
-  }
-
-  if ( !isDuplicate ) {
-    UrlFetchApp.fetch("https://habitica.com/api/v3/user/webhook", newWebhookParams)
-  }
+  apiMult_createNewWebhookNoDuplicates(payload)
 }
 
-/**
- * Do things when the webhook runs
- */
+// do things when the webhook runs
 function doPost(e) {
-  // var dataContents = JSON.parse(e.postData.contents)
+  // const dataContents = JSON.parse(e.postData.contents)
+  // const type = dataContents.type
+  // const task = dataContents.task
 
-  // TODO - This is a test
-  var dataContents = {
-    task: "task",
-    type: "scored"
-  }
-
-  // Get additional data that the user might want in the spreadsheet
-  // TODO - Let the user customize what goes in the sheet
-  const user = JSON.parse(api_getAuthenticatedUserProfile("stats"))
-  const timestamp = Date.now()
-
-  // Format data for inserting into the spreadsheet
-  // TODO - This is a test
-  var spreadsheetPayload = [[]]
-  for ( let key in dataContents ) {
-    spreadsheetPayload[0].push(dataContents[key])
-  }
-
-  // Put data in the spreadsheet
-  appendValues(SPREADSHEET_ID, SHEET_NAME, spreadsheetPayload, "RAW")
-
-  return HtmlService.createHtmlOutput()
-}
-
-/**
- * Gets user info such as cronCount, mana, experience, and level
- * @param {string} userFields what user data to request
- * @returns {*} requested user data
- */
-function api_getAuthenticatedUserProfile(userFields) {
-  const params = {
-    "method" : "get",
-    "headers" : HEADERS,
-    "muteHttpExceptions" : true,
+  task = { "alias": "test" }
+  type = "scored"
+  
+  // Sanitize task alias
+  let sanitizedAlias = "sanitized" // This will be the value if undefined, null, or blank
+  if ( (task.alias != undefined) && (task.alias != null) && (task.alias != "") ) {
+    sanitizedAlias = task.alias
   }
   
-  var url = "https://habitica.com/api/v3/user"
-  if (userFields != "") {
-    url += "?userFields=" + userFields
-  }
+  if (type == "scored") {
+    // Format data for inserting into the spreadsheet
+    // TODO - This is a test
+    var spreadsheetPayload = [[type, sanitizedAlias]]
 
-  return UrlFetchApp.fetch(url, params)
+    // Put data in the spreadsheet
+    appendValues(SPREADSHEET_ID, SHEET_NAME, spreadsheetPayload, "RAW")
+  }
+  return HtmlService.createHtmlOutput()
 }
 
 /**
@@ -183,4 +120,63 @@ function appendValues(spreadsheetId, sheetName, values, valueInputOption) {
     // TODO (developer) - Handle exception
     console.log('Failed with error %s', err.message)
   }
+}
+
+// Create a webhook if no duplicate exists
+function apiMult_createNewWebhookNoDuplicates(payload) {
+  const response = api_getWebhooks()
+  const webhooks = JSON.parse(response).data
+  var duplicateExists = 0
+    
+  for (var i in webhooks) {
+    if (webhooks[i].label == payload.label) {
+      duplicateExists = 1;
+    }
+  }
+  // If webhook to be created doesn't exist yet
+  if (!duplicateExists) {
+    api_createNewWebhook(payload)
+  }
+}
+
+// Used to see existing webhooks, and therefore if there's a duplicate
+function api_getWebhooks() {
+  const params = {
+    "method" : "get",
+    "headers" : HEADERS,
+    "muteHttpExceptions" : true,
+  }
+  
+  const url = "https://habitica.com/api/v3/user/webhook"
+  return UrlFetchApp.fetch(url, params)
+}
+
+// Creates a webhook (as part of the "don't make it if there's a duplicate" function)
+function api_createNewWebhook(payload) {
+  const params = {
+    "method" : "post",
+    "headers" : HEADERS,
+    "contentType" : "application/json",
+    "payload" : JSON.stringify(payload),
+    "muteHttpExceptions" : true,
+  }
+   
+  const url = "https://habitica.com/api/v3/user/webhook"
+  return UrlFetchApp.fetch(url, params)
+}
+
+// Gets user info so I can use it, especially stats like mana, experience, and level
+function api_getAuthenticatedUserProfile(userFields) {
+  const params = {
+    "method" : "get",
+    "headers" : HEADERS,
+    "muteHttpExceptions" : true,
+  }
+  
+  var url = "https://habitica.com/api/v3/user"
+  if (userFields != "") {
+    url += "?userFields=" + userFields
+  }
+
+  return UrlFetchApp.fetch(url, params)
 }
