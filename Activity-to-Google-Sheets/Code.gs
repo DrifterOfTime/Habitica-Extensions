@@ -45,6 +45,17 @@ const SPREADSHEET_ID = "SpreadsheetID"
 const SHEET_NAME = "Sheet1"
 
 /* ========================================== */
+/* [Users] Optional customizations to fill in */
+/* ========================================== */
+
+/**
+ * Maximum rate (in minutes) to allow API requests
+ * Probably don't set to less than 2 to avoid API request failures
+ * Habitica blocks requests after 30 per minute
+ */
+const MAX_API_REQUEST_RATE = 5
+
+/* ========================================== */
 /* [Users] Do not edit code below this line   */
 /* ========================================== */
 const AUTHOR_ID = "fd200d06-beb0-46fd-b42f-81924c037574"
@@ -55,8 +66,16 @@ const HEADERS = {
   "x-api-key" : API_TOKEN,
 }
 
+var lastAPIRequestTimestamp
+
+var postDataContents
+var apiUserStats
+
+/**
+ * [Users] Run this function manually once
+ * Creates the webhook only if it doesn't already exist
+ */
 function doOneTimeSetup() {
-  // Next, create the webhook
   const options = {
     "scored" : true,
   }
@@ -69,41 +88,73 @@ function doOneTimeSetup() {
   apiMult_createNewWebhookNoDuplicates(payload)
 }
 
-// do things when the webhook runs
+/**
+ * Runs when receiving webhook data
+ * @param {string} JSON containing POST data
+ * @returns {*} HtmlService.createHtmlOutput() Basic HTML response
+ */
 function doPost(e) {
-  // const dataContents = JSON.parse(e.postData.contents)
-  // const type = dataContents.type
-  // const task = dataContents.task
+  postDataContents = JSON.parse(e.postData.contents)
 
-  task = { "alias": "test" }
-  type = "scored"
-  
-  // Sanitize task alias
-  let sanitizedAlias = "sanitized" // This will be the value if undefined, null, or blank
-  if ( (task.alias != undefined) && (task.alias != null) && (task.alias != "") ) {
-    sanitizedAlias = task.alias
+  if ( lastAPIRequestTimestamp == undefined ) {
+    lastAPIRequestTimestamp = 0
   }
-  
-  if (type == "scored") {
-    // Format data for inserting into the spreadsheet
-    // TODO - This is a test
-    var spreadsheetPayload = [[type, sanitizedAlias]]
 
-    // Put data in the spreadsheet
-    appendValues(SPREADSHEET_ID, SHEET_NAME, spreadsheetPayload, "RAW")
+  if ( Date.now() - lastAPIRequestTimestamp > MAX_API_REQUEST_RATE * 1000 ) {
+    apiUserStats = JSON.parse(api_getAuthenticatedUserProfile("stats"))
+
+    lastAPIRequestTimestamp = Date.now()
   }
+
+  taskActivityToGoogleSheets(postDataContents, apiUserStats)
+
   return HtmlService.createHtmlOutput()
 }
 
 /**
+ * Takes scoring data from the webhook and appends it to the end of a Google Sheet
+ * @param {object} postDataContents Parsed POST data
+ */
+function taskActivityToGoogleSheets(postDataContents, apiUserStats) {
+  const dateNow = new Date(Date.now())
+  dateNow.setTime(dateNow.getTime())
+
+  const customTimestamp = dateNow.getFullYear() + "/" + ( dateNow.getMonth() + 1 ) + "/" + dateNow.getDate() + " " + dateNow.getHours() + ":" + dateNow.getMinutes() + ":" + dateNow.getSeconds()
+
+  if (postDataContents.type == "scored") {
+    // Format data for inserting into the spreadsheet
+    // TODO - This is a test
+    var spreadsheetPayload = [
+      [
+        customTimestamp,
+        apiUserStats.data.flags.cronCount,
+        postDataContents.task.text,
+        postDataContents.task.notes,
+        postDataContents.direction,
+        postDataContents.task.type,
+        postDataContents.task.id,
+        postDataContents.task.tags.toString(),
+        postDataContents.delta,
+        postDataContents.task.value,
+        postDataContents.task.priority
+      ]
+    ]
+
+    sheetRange = SHEET_NAME + "!A:A"
+    // Put data in the spreadsheet
+    appendValues(SPREADSHEET_ID, sheetRange, spreadsheetPayload, "RAW")
+  }
+}
+
+/**
  * Appends values to the specified sheet
- * @param {string} spreadsheetId spreadsheet's ID
- * @param {string} sheetName sheet in the spreadsheet
- * @param {list<string>} values list of rows of values to input
- * @param valueInputOption determines how the input should be interpreted
+ * @param {string} spreadsheetId Spreadsheet's ID
+ * @param {string} sheetName Sheet in the spreadsheet
+ * @param {list<string>} Values list of rows of values to input
+ * @param valueInputOption Determines how the input should be interpreted
  * @see
  * https://developers.google.com/sheets/api/reference/rest/v4/ValueInputOption
- * @returns {*} spreadsheet with appended values
+ * @returns {*} spreadsheet Spreadsheet with appended values
  */
 function appendValues(spreadsheetId, sheetName, values, valueInputOption) {
   try {
@@ -122,7 +173,10 @@ function appendValues(spreadsheetId, sheetName, values, valueInputOption) {
   }
 }
 
-// Create a webhook if no duplicate exists
+/**
+ * Create a webhook if it doesn't already exist
+ * @param {object} payload Object containing webhook create request data
+ */
 function apiMult_createNewWebhookNoDuplicates(payload) {
   const response = api_getWebhooks()
   const webhooks = JSON.parse(response).data
@@ -139,7 +193,11 @@ function apiMult_createNewWebhookNoDuplicates(payload) {
   }
 }
 
-// Used to see existing webhooks, and therefore if there's a duplicate
+/**
+ * Get currently registered webhooks
+ * Used to detect duplicates when creating the webhook
+ * @returns {string} webhooks JSON data listing currently registered webhooks
+ */
 function api_getWebhooks() {
   const params = {
     "method" : "get",
@@ -151,7 +209,12 @@ function api_getWebhooks() {
   return UrlFetchApp.fetch(url, params)
 }
 
-// Creates a webhook (as part of the "don't make it if there's a duplicate" function)
+/**
+ * Creates a webhook
+ * Called if there the webhook doesn't already exist
+ * @param {object} payload Object containing webhook create request data
+ * @returns {string} fetchData JSON of web request data
+ */
 function api_createNewWebhook(payload) {
   const params = {
     "method" : "post",
@@ -165,7 +228,12 @@ function api_createNewWebhook(payload) {
   return UrlFetchApp.fetch(url, params)
 }
 
-// Gets user info so I can use it, especially stats like mana, experience, and level
+/**
+ * Gets user profile information
+ * Used in this script only to get the current cron count
+ * @params {string} userFields Subsection of user data to request. This script only requests "stats"
+ * @returns {string} userProfile JSON containing user profile data
+ */
 function api_getAuthenticatedUserProfile(userFields) {
   const params = {
     "method" : "get",
